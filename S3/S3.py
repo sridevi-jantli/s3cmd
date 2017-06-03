@@ -327,6 +327,9 @@ class S3(object):
 
         def _get_common_prefixes(data):
             return getListFromXml(data, "CommonPrefixes")
+        
+        def _get_next_marker(data):
+            return getTextFromXml(data, ".//NextMarker")
 
         uri_params = uri_params and uri_params.copy() or {}
         truncated = True
@@ -339,17 +342,29 @@ class S3(object):
             response = self.bucket_list_noparse(bucket, prefix, recursive, uri_params, max_keys)
             current_list = _get_contents(response["data"])
             current_prefixes = _get_common_prefixes(response["data"])
+            next_marker = _get_next_marker(response["data"])
             num_objects += len(current_list)
             num_prefixes += len(current_prefixes)
             if limit > num_objects + num_prefixes:
                 max_keys = limit - (num_objects + num_prefixes)
             truncated = _list_truncated(response["data"])
             if truncated:
+                """                                                              
+                It is possible to get empty contents or common_prefixes with truncation
+                set to true and having next marker set with some value. So better to
+                check before trying to access the contents or common_prefixes instead
+                of asssuming that they are non-empty if the response is truncated.
+                """
                 if limit == -1 or num_objects + num_prefixes < limit:
                     if current_list:
                         uri_params['marker'] = current_list[-1]["Key"]
-                    else:
+                    elif current_prefixes:
                         uri_params['marker'] = current_prefixes[-1]["Prefix"]
+                    elif next_marker:
+                        debug("next_marker = " + next_marker)
+                        uri_params['marker'] = next_marker
+                    else:
+                        error("There are no objects or prefixes or next marker to continue further")
                     debug("Listing continues after '%s'" % uri_params['marker'])
                 else:
                     yield truncated, current_prefixes, current_list
